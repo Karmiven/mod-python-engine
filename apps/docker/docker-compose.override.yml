@@ -1,0 +1,30 @@
+services:
+  ac-dependencies:
+    image: ubuntu:22.04-deps
+    build:
+      context: .
+      dockerfile: modules/mod-python-engine/apps/docker/Dockerfile.deps
+    profiles: ["tools"]
+
+  ac-worldserver:
+    build: &ac-build-settings
+      context: .
+      dockerfile: apps/docker/Dockerfile
+      args:
+        # Ensure your other custom args are still here if needed
+        UBUNTU_VERSION: 22.04-deps
+        USER_ID: ${DOCKER_USER_ID:-1000}
+        GROUP_ID: ${DOCKER_GROUP_ID:-1000}
+        DOCKER_USER: ${DOCKER_USER:-acore}
+    volumes:
+      - ./modules:/azerothcore/modules:ro
+
+  ac-authserver:
+    build: *ac-build-settings
+
+  ac-db-import:
+    build: *ac-build-settings
+
+  ac-tools:
+    build: *ac-build-settings
+    profiles: ["tools"]
