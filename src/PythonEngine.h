@@ -43,7 +43,7 @@ public:
     template<typename... Args>
     void Trigger(HookInfo hinfo, uint32 entryId, Args&&... args)
     {
-        if (!enabled || reloading)
+        if (!enabled || reloading || !HasBindingsFor(hinfo, entryId))
             return;
 
         auto argsTuple = std::make_tuple(std::forward<Args>(args)...);
@@ -93,6 +93,28 @@ private:
     }
     static PythonAPI::Object to_py(const char* s) { return PythonAPI::FromString(std::string(s)); }
     static PythonAPI::Object to_py(const std::string& s) { return PythonAPI::FromString(s); }
+
+    /**
+     * @brief Check if any callbacks are registered for a specific hook
+     *
+     * @param hook Hook identifier to check
+     * @param entryId Specific entry ID (creature/item/spell/etc., 0 for global)
+     * @return true if callbacks registered, false otherwise
+     */
+    [[nodiscard]] bool HasBindingsFor(HookInfo hinfo, uint32 entryId = 0) const noexcept
+    {
+        auto itr = hookMap.find(hinfo);
+        if (itr == hookMap.end())
+            return false;
+
+        auto hasCallbacks = [&](uint32 id)
+        {
+            auto it = itr->second.find(id);
+            return it != itr->second.end() && !it->second.empty();
+        };
+
+        return hasCallbacks(0) || (entryId > 0 && hasCallbacks(entryId));
+    }
 
     /**
      * @brief Executes all registered Python callbacks for a specific hook
