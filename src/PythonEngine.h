@@ -49,6 +49,12 @@ public:
         auto argsTuple = std::make_tuple(std::forward<Args>(args)...);
 
         std::shared_lock<std::shared_mutex> lock(hookMutex);
+
+        // CRITICAL: Double-check reloading after acquiring lock
+        // Prevent deadlocks using other methods that need unique_lock
+        if (reloading)
+            return;
+
         TriggerDepthGuard depthGuard;
 
         auto itr = hookMap.find(hinfo);

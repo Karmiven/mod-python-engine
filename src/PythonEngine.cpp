@@ -115,16 +115,16 @@ void PythonEngine::ReloadScripts()
 
     reloading = true;
 
-    LOG_DEBUG("module.python", "Clearing Hooks registry...");
-
+    // Acquire unique_lock - this blocks until all Trigger() calls
+    // (which hold shared_locks) finish naturally
     {
         std::unique_lock<std::shared_mutex> lock(hookMutex);
-        PythonAPI::GILGuard gil;
 
+        LOG_DEBUG("module.python", "All event handlers finished. Clearing hooks...");
+
+        PythonAPI::GILGuard gil;
         hookMap.clear();
     }
-    // Release lock here to allow re-entry during script execution if needed
-    // (though ExecuteScript re-locks GIL)
 
     LoadScripts();
 
