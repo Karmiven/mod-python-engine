@@ -1,9 +1,9 @@
 services:
   ac-dependencies:
-    image: ubuntu:22.04-deps
+    image: ubuntu:22.04-python
     build:
       context: .
-      dockerfile: modules/mod-python-engine/apps/docker/Dockerfile.deps
+      dockerfile: modules/mod-python-engine/apps/docker/Dockerfile
     profiles: ["tools"]
 
   ac-worldserver:
@@ -12,7 +12,7 @@ services:
       dockerfile: apps/docker/Dockerfile
       args:
         # Ensure your other custom args are still here if needed
-        UBUNTU_VERSION: 22.04-deps
+        UBUNTU_VERSION: 22.04-python
         USER_ID: ${DOCKER_USER_ID:-1000}
         GROUP_ID: ${DOCKER_GROUP_ID:-1000}
         DOCKER_USER: ${DOCKER_USER:-acore}
