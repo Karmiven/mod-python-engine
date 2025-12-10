@@ -87,10 +87,10 @@ namespace PyEng::PlayerAdapter
     }
 
     // Destroy item from player inventory
-    inline void DestroyItem(Player* player, uint32 item, uint32 count)
+    inline void DestroyItem(Player* player, uint8 bag, uint8 slot)
     {
         if (player)
-            player->DestroyItemCount(item, count, true, false);
+            player->DestroyItem(bag, slot, true);
     }
 
     // Remove item from specific bag/slot
