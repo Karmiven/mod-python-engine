@@ -1,5 +1,6 @@
 #include "PythonHeaders.h"
 #include "ItemAdapter.h"
+#include "ItemTemplate.h"
 
 namespace bp = boost::python;
 

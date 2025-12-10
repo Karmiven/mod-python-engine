@@ -5,12 +5,16 @@
 CREATE_REGISTRY_SCOPE(Exports);
 
 // Forward declarations into the Exports scope
-REGISTER_TO_SCOPE(Exports, export_unit_class, 20);
-REGISTER_TO_SCOPE(Exports, export_worldobject_class, 10);
-REGISTER_TO_SCOPE(Exports, export_player_class, 21);
-REGISTER_TO_SCOPE(Exports, export_game_constants, 1);
 REGISTER_TO_SCOPE(Exports, export_hook_api, 0);
+REGISTER_TO_SCOPE(Exports, export_game_constants, 1);
 REGISTER_TO_SCOPE(Exports, export_object_class, 5);
+REGISTER_TO_SCOPE(Exports, export_position_struct, 5);
+REGISTER_TO_SCOPE(Exports, export_worldlocation_class, 10);
+REGISTER_TO_SCOPE(Exports, export_worldobject_class, 15);
+REGISTER_TO_SCOPE(Exports, export_unit_class, 20);
+REGISTER_TO_SCOPE(Exports, export_creature_class, 25);
+REGISTER_TO_SCOPE(Exports, export_gameobject_class, 25);
+REGISTER_TO_SCOPE(Exports, export_player_class, 25);
 
 // Register module name with Python before Py_Initialize()
 extern "C" PyObject* PyInit_azerothcore();

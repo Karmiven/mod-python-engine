@@ -39,11 +39,12 @@ void export_object_class()
 
 /**
  * @brief WorldObject Class - Base class for objects in the game world
- * @note Inherits from Object, WorldObject
+ * @note Inherits from Object, WorldLocation
  */
 void export_worldobject_class()
 {
-    bp::class_<WorldObject, bp::bases<Object>, boost::noncopyable> worldobject_class("WorldObject", bp::no_init);
+    bp::class_<WorldObject, bp::bases<Object, WorldLocation>, boost::noncopyable> worldobject_class("WorldObject",
+                                                                                                    bp::no_init);
 
     // common
     worldobject_class.def("GetName", &WorldObject::GetName, bp::return_value_policy<bp::copy_const_reference>());

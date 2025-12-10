@@ -10,7 +10,7 @@ void export_gameobject_class()
 {
     using namespace PyEng::GameObjectAdapter;
 
-    bp::class_<GameObject, boost::noncopyable> gameobject_class("GameObject", bp::no_init);
+    bp::class_<GameObject, bp::bases<WorldObject>, boost::noncopyable> gameobject_class("GameObject", bp::no_init);
 
     gameobject_class.def("GetEntry", &GameObject::GetEntry);
     gameobject_class.def("GetName", &GameObject::GetName, bp::return_value_policy<bp::copy_const_reference>());
