@@ -2,6 +2,8 @@
 #define MOD_PYTHON_ENGINE_H
 
 #include "PythonAPI.h"
+#include "PythonConverter.h"
+#include "PythonGIL.h"
 #include "HookInfo.h"
 #include "Define.h"
 #include <atomic>
@@ -14,6 +16,7 @@
 // Forward declaration
 void InitAzerothCoreModule();
 
+using namespace PyEng::Bridge;
 using HookInfo = PyEng::Hooks::HookInfo;
 
 class PythonEngine
@@ -28,17 +31,26 @@ public:
     void LoadScripts();
     void ReloadScripts();
     void Shutdown();
-    void RegisterHook(const std::string& eventName, PythonAPI::Object callback, uint32 entryId = 0);
+
+    /**
+     * @brief Register a Python callback for a game event hook
+     *
+     * @param eventName Hook event name (ex., "PLAYER_ON_LOGIN")
+     * @param callback Python callable object
+     * @param entryId Specific entry ID (creature, item, etc.; 0 for global)
+     */
+    void RegisterHook(const std::string& eventName, API::Object callback, uint32 entryId = 0);
 
     [[nodiscard]] bool IsEnabled() const { return enabled; }
 
     /**
-     * @brief Main bridge between C++ game logic and Python scripts. When a specific
-     * game event occurs (for ex., player login, creature death), this method looks
-     * up all registered Python callbacks and executes them.
+     * @brief Main bridge between C++ game logic and Python scripts
      *
-     * @param hinfo Hook identifier to trigger (created via MakeHookInfo)
-     * @param entryId Specific entry ID (creature/item/spell/etc., 0 for global)
+     * When a specific game event occurs (ex., player login, creature death),
+     * this method looks up all registered Python callbacks and executes them.
+     *
+     * @param hinfo Hook identifier to trigger
+     * @param entryId Specific entry ID (creature, item, etc.; 0 for global)
      * @param args Variadic arguments to pass to Python callbacks
      */
     template<typename... Args>
@@ -48,11 +60,10 @@ public:
             return;
 
         auto argsTuple = std::make_tuple(std::forward<Args>(args)...);
-
         std::shared_lock<std::shared_mutex> lock(hookMutex);
 
-        // CRITICAL: Double-check reloading after acquiring lock
-        // Prevent deadlocks using other methods that need unique_lock
+        // CRITICAL: Double-check reloading after acquiring lock. Prevent race
+        // conditions with reload scripts operations.
         if (reloading)
             return;
 
@@ -67,17 +78,20 @@ public:
             TriggerCallbacks(itr->second, entryId, argsTuple); // entry-specific hooks
     }
 
-    static void TriggerHook(PyEng::Hooks::HookInfo* hinfo, uint32 entryId);
+    static void TriggerHook(HookInfo* hinfo, uint32 entryId);
 
 private:
+    using CallbackList = std::vector<API::Object>;
+    using HookEntryMap = std::unordered_map<uint32, CallbackList>;
+    using HookRegistry = std::unordered_map<HookInfo, HookEntryMap>;
+
     PythonEngine() = default;
     ~PythonEngine();
 
     void ExecuteScript(const std::string& filepath);
     void LogException();
-    void LogPythonError();
 
-    // RAII guard for Trigger Depth
+    // RAII guard for tracking Trigger depth
     struct TriggerDepthGuard
     {
         TriggerDepthGuard() { PythonEngine::triggerDepth++; }
@@ -86,28 +100,11 @@ private:
         TriggerDepthGuard& operator=(const TriggerDepthGuard&) = delete;
     };
 
-    // Type converters
-    template<typename T>
-    static PythonAPI::Object to_py(T&& v)
-    {
-        return PythonAPI::Object(std::forward<T>(v));
-    }
-    template<typename T>
-    static PythonAPI::Object to_py(T* p)
-    {
-        if (!p)
-            return PythonAPI::Object();
-
-        return PythonAPI::Object(PythonAPI::Ptr(p));
-    }
-    static PythonAPI::Object to_py(const char* s) { return PythonAPI::FromString(std::string(s)); }
-    static PythonAPI::Object to_py(const std::string& s) { return PythonAPI::FromString(s); }
-
     /**
      * @brief Check if any callbacks are registered for a specific hook
      *
-     * @param hook Hook identifier to check
-     * @param entryId Specific entry ID (creature/item/spell/etc., 0 for global)
+     * @param hinfo Hook identifier to check
+     * @param entryId Specific entry ID (creature, item, etc.; 0 for global)
      * @return True if callbacks registered, false otherwise
      */
     [[nodiscard]] bool HasBindingsFor(HookInfo hinfo, uint32 entryId = 0) const noexcept
@@ -116,36 +113,38 @@ private:
         if (itr == hookMap.end())
             return false;
 
-        auto hasCallbacks = [&](uint32 id)
+        auto callbacks = [&](uint32 id)
         {
             auto it = itr->second.find(id);
             return it != itr->second.end() && !it->second.empty();
         };
 
-        return hasCallbacks(0) || (entryId > 0 && hasCallbacks(entryId));
+        return callbacks(0) || (entryId > 0 && callbacks(entryId));
     }
 
     /**
      * @brief Executes all registered Python callbacks for a specific hook
      *
      * @param entryMap Map of entity IDs to callback vectors
-     * @param entryId Specific entry ID (creature/item/spell/etc., 0 for global)
+     * @param entryId Specific entry ID (creature, item, etc.; 0 for global)
      * @param argsTuple Tuple of C++ arguments to pass to Python callbacks
      */
     template<typename Tuple>
-    void TriggerCallbacks(const std::unordered_map<uint32, std::vector<PythonAPI::Object>>& entryMap, uint32 entryId,
-                          const Tuple& argsTuple)
+    void TriggerCallbacks(const HookEntryMap& entryMap, uint32 entryId, const Tuple& argsTuple)
     {
         auto itr = entryMap.find(entryId);
         if (itr == entryMap.end())
             return;
 
-        PythonAPI::GILGuard gil;
+        GILGuard gil;
+
         for (const auto& callback : itr->second)
         {
             try
             {
-                std::apply([&](const auto&... unpacked_args) { callback(to_py(unpacked_args)...); }, argsTuple);
+                std::apply([&](const auto&... unpacked_args) {
+                    callback(Converter::ToPython(unpacked_args)...);
+                }, argsTuple);
             }
             catch (...)
             {
@@ -159,12 +158,12 @@ private:
     mutable std::shared_mutex hookMutex;
     inline static thread_local int triggerDepth = 0;
 
-    std::unordered_map<HookInfo, std::unordered_map<uint32, std::vector<PythonAPI::Object>>> hookMap;
-
-    PythonAPI::Object main_namespace;
+    HookRegistry hookMap;
+    API::Object main_namespace;
 };
 
 extern PythonEngine* sPythonEngine;
+
 #define sPythonEngine PythonEngine::instance()
 
 #endif // MOD_PYTHON_ENGINE_H

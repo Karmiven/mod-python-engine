@@ -1,4 +1,5 @@
 #include "PythonEngine.h"
+#include "PythonException.h"
 #include "HookRegistry.h"
 #include "Config.h"
 #include "Log.h"
@@ -37,17 +38,23 @@ void PythonEngine::Initialize()
     try
     {
         InitAzerothCoreModule();
+
+        // Initialize Python - main thread now HOLDS the GIL
         Py_Initialize();
 
-        PythonAPI::Object main_module = PythonAPI::Import("__main__");
+        // Import modules and setup namespace while we have the GIL
+        API::Object main_module = API::Import("__main__");
         main_namespace = main_module.attr("__dict__");
+
+        // CRITICAL: After Py_Initialize(), the calling thread holds the GIL. We must
+        // release it to allow other threads to use GILGuard (PyGILState_Ensure).
+        PyEval_SaveThread();
 
         LOG_INFO("module.python", "Python Engine Initialized Successfully.");
     }
     catch (...)
     {
         LOG_ERROR("module.python", "Python Engine Initialization Failed!");
-        LogException();
         enabled = false;
     }
 }
@@ -61,10 +68,10 @@ void PythonEngine::Shutdown()
 
     {
         std::unique_lock<std::shared_mutex> lock(hookMutex);
-        PythonAPI::GILGuard gil;
+        GILGuard gil;
 
         hookMap.clear();
-        main_namespace = PythonAPI::Object(); // Release main module ref
+        main_namespace = API::Object(); // Release main module ref
     }
 
     // Py_Finalize should generally be called only if we are sure no other C++
@@ -123,12 +130,11 @@ void PythonEngine::ReloadScripts()
 
         LOG_DEBUG("module.python", "All event handlers finished. Clearing hooks...");
 
-        PythonAPI::GILGuard gil;
+        GILGuard gil;
         hookMap.clear();
     }
 
     LoadScripts();
-
     reloading = false;
 }
 
@@ -139,10 +145,12 @@ void PythonEngine::ExecuteScript(const std::string& filepath)
 
     LOG_DEBUG("module.python", "Executing script file: {}...", filepath);
 
+    // Acquire GIL BEFORE Python script execution
+    GILGuard gil;
+
     try
     {
-        PythonAPI::GILGuard gil;
-        PythonAPI::ExecFile(filepath, main_namespace, main_namespace);
+        API::ExecFile(filepath, main_namespace, main_namespace);
     }
     catch (...)
     {
@@ -151,7 +159,7 @@ void PythonEngine::ExecuteScript(const std::string& filepath)
     }
 }
 
-void PythonEngine::RegisterHook(const std::string& eventName, PythonAPI::Object callback, uint32 entryId)
+void PythonEngine::RegisterHook(const std::string& eventName, API::Object callback, uint32 entryId)
 {
     if (!enabled || eventName.empty())
         return;
@@ -161,13 +169,13 @@ void PythonEngine::RegisterHook(const std::string& eventName, PythonAPI::Object 
     if (!PyCallable_Check(callback.ptr()))
     {
         LOG_ERROR("module.python", "Attempted to register a non-callable callback for hook '{}' and entry {}.",
-                                   eventName, entryId);
+                  eventName, entryId);
         return;
     }
 
     using PyEng::Hooks::GetHookByName;
-
     auto hookIdOpt = GetHookByName(eventName);
+
     if (!hookIdOpt.has_value())
     {
         LOG_ERROR("module.python", "Attempted to register unknown event hook '{}'.", eventName);
@@ -181,11 +189,12 @@ void PythonEngine::RegisterHook(const std::string& eventName, PythonAPI::Object 
     if (triggerDepth > 0)
     {
         LOG_ERROR("module.python", "CRITICAL: Attempted to register hook '{}' inside an event handler! "
-                                   "Dynamic registration causes deadlocks and is forbidden.", eventName);
+                  "Dynamic registration causes deadlocks and is forbidden.", eventName);
         return;
     }
 
     std::unique_lock<std::shared_mutex> lock(hookMutex);
+
     try
     {
         hookMap[hookId][entryId].push_back(callback);
@@ -204,9 +213,13 @@ void PythonEngine::LogException()
     {
         std::rethrow_exception(std::current_exception());
     }
-    catch (PythonAPI::ErrorAlreadySet const&)
+    catch (API::ErrorAlreadySet const&)
     {
-        LogPythonError();
+        std::string error = ExceptionHandler::FormatException();
+        if (error.empty())
+            error = "Unable to extract traceback...";
+
+        LOG_ERROR("module.python", "Python Exception:\n{}", error);
     }
     catch (const std::exception& e)
     {
@@ -214,15 +227,6 @@ void PythonEngine::LogException()
     }
     catch (...)
     {
-        LOG_ERROR("module.python", "C++ Exception:\nUnknown non-standard exception.");
+        LOG_ERROR("module.python", "C++ Exception:\nUnknown non-standard exception...");
     }
-}
-
-void PythonEngine::LogPythonError()
-{
-    if (!PyErr_Occurred())
-        return;
-
-    LOG_ERROR("module.python", "Python exception caught (printed to stderr).");
-    PyErr_Print();
 }
