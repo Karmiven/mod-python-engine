@@ -108,7 +108,7 @@ public:
      * @param action Contains information about the action id
      * @param code Contains information about the code entered
      */
-    void OnGossipSelectCode(Player* player, Item* item, uint32 sender, uint32 action, const char* code) override
+    void OnGossipSelectCode(Player* player, Item* item, uint32 sender, uint32 action, char const* code) override
     {
         TRIGGER_ITEM_HOOK(ON_USE, item->GetEntry(), player, item, sender, action, code);
     }

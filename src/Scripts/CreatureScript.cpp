@@ -54,7 +54,7 @@ public:
      * @param code Contains information about the code entered
      * @return False if you want to continue, true if you want to disable
      */
-    bool OnGossipSelectCode(Player* player, Creature* creature, uint32 sender, uint32 action, const char* code) override
+    bool OnGossipSelectCode(Player* player, Creature* creature, uint32 sender, uint32 action, char const* code) override
     {
         TRIGGER_CREATURE_HOOK(ON_GOSSIP_SELECT_CODE, creature->GetEntry(), player, creature, sender, action, code);
         return false;

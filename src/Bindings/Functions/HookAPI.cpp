@@ -12,7 +12,7 @@ namespace
      * @param eventName Hook name string (ex., "PLAYER_ON_LOGIN")
      * @param callback Python callable object
      */
-    void RegisterGlobal(const char* eventName, API::Object callback)
+    void RegisterGlobal(char const* eventName, API::Object callback)
     {
         if (!sPythonEngine->IsEnabled())
             return;
@@ -27,7 +27,7 @@ namespace
      * @param callback Python callable object
      * @param entryId Specific entry ID (creature/item/spell/etc.)
      */
-    void RegisterEntry(const char* eventName, API::Object callback, uint32 entryId)
+    void RegisterEntry(char const* eventName, API::Object callback, uint32 entryId)
     {
         if (!sPythonEngine->IsEnabled())
             return;

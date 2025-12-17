@@ -30,8 +30,8 @@ namespace PyEng::Bridge
         }
 
         // String conversions
-        static API::Object ToPython(const char* str) { return API::FromString(std::string(str)); }
-        static API::Object ToPython(const std::string& str) { return API::FromString(str); }
+        static API::Object ToPython(char const* str) { return API::FromString(std::string(str)); }
+        static API::Object ToPython(std::string const& str) { return API::FromString(str); }
 
     private:
         Converter() = delete;

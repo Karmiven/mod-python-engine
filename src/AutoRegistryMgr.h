@@ -43,7 +43,7 @@ private:
         int priority;   // lower = executes first
         void (*func)(); // function pointer
 
-        bool operator<(const Entry& other) const noexcept { return priority < other.priority; }
+        bool operator<(Entry const& other) const noexcept { return priority < other.priority; }
     };
 
     /**

@@ -37,21 +37,21 @@ namespace PyEng::PlayerAdapter
     }
 
     // Say text in specified language
-    inline void Say(Player* player, const std::string& text, uint32 language)
+    inline void Say(Player* player, std::string const& text, uint32 language)
     {
         if (player)
             player->Say(text, static_cast<Language>(language));
     }
 
     // Yell text in specified language
-    inline void Yell(Player* player, const std::string& text, uint32 language)
+    inline void Yell(Player* player, std::string const& text, uint32 language)
     {
         if (player)
             player->Yell(text, static_cast<Language>(language));
     }
 
     // Send notification to player
-    inline void SendNotification(Player* player, const std::string& text)
+    inline void SendNotification(Player* player, std::string const& text)
     {
         if (player && player->GetSession())
         {
@@ -61,7 +61,7 @@ namespace PyEng::PlayerAdapter
     }
 
     // Send system message to player
-    inline void SendSysMessage(Player* player, const std::string& text)
+    inline void SendSysMessage(Player* player, std::string const& text)
     {
         if (player && player->GetSession())
         {

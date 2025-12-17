@@ -33,7 +33,7 @@ namespace PyEng::Hooks
      * @param info Hook identifier structure
      * @return Always returns true (used for static initialization)
      */
-    inline bool RegisterHookInternal(const char* name, HookInfo info)
+    inline bool RegisterHookInternal(char const* name, HookInfo info)
     {
         GetHookMap()[name] = info;
         return true;

@@ -12,8 +12,8 @@ namespace PyEng::Bridge
         GILGuard() : state(PyGILState_Ensure()) {}
         ~GILGuard() { PyGILState_Release(state); }
 
-        GILGuard(const GILGuard&) = delete;
-        GILGuard& operator=(const GILGuard&) = delete;
+        GILGuard(GILGuard const&) = delete;
+        GILGuard& operator=(GILGuard const&) = delete;
 
     private:
         PyGILState_STATE state;

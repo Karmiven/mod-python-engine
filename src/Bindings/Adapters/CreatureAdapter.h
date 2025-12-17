@@ -16,13 +16,13 @@ namespace PyEng::CreatureAdapter
             creature->Respawn();
     }
 
-    inline void Say(Creature* creature, const std::string& text, uint32 language)
+    inline void Say(Creature* creature, std::string const& text, uint32 language)
     {
         if (creature)
             creature->Say(text, static_cast<Language>(language));
     }
 
-    inline void Yell(Creature* creature, const std::string& text, uint32 language)
+    inline void Yell(Creature* creature, std::string const& text, uint32 language)
     {
         if (creature)
             creature->Yell(text, static_cast<Language>(language));
