@@ -21,17 +21,23 @@ namespace PyEng::Bridge
         using ErrorAlreadySet = boost::python::error_already_set;
 
         // Object creation
-        static Object FromString(const std::string& s) { return Object(s); }
+        static Object FromString(std::string const& s) { return Object(s); }
 
         // Module operations
-        static Object Import(const std::string& name)
+        static Object Import(std::string const& name)
         {
             return boost::python::import(boost::python::str(name));
         }
 
-        static Object ExecFile(const std::string& filepath, Object& globals, Object& locals)
+        // Execution
+        static Object ExecFile(std::string const& filepath, Object& globals, Object& locals)
         {
             return boost::python::exec_file(filepath.c_str(), globals, locals);
+        }
+
+        static Object Exec(std::string const& code, Object& globals, Object& locals)
+        {
+            return boost::python::exec(boost::python::str(code), globals, locals);
         }
 
         // Pointer wrapper
@@ -43,14 +49,14 @@ namespace PyEng::Bridge
 
         // Extraction
         template<typename T>
-        static T Extract(const Object& obj)
+        static T Extract(Object const& obj)
         {
             return boost::python::extract<T>(obj);
         }
 
         // Checks
-        static bool IsNone(const Object& obj) { return obj.ptr() == Py_None; }
-        static bool IsCallable(const Object& obj) { return PyCallable_Check(obj.ptr()); }
+        static bool IsNone(Object const& obj) { return obj.ptr() == Py_None; }
+        static bool IsCallable(Object const& obj) { return PyCallable_Check(obj.ptr()); }
 
     private:
         API() = delete;
