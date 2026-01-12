@@ -87,7 +87,7 @@ public:
     }
 };
 
-void AddPythonPlayerScripts()
+void AddSC_PythonPlayerScripts()
 {
     new PythonPlayerScript();
 }

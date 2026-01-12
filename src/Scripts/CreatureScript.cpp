@@ -144,7 +144,7 @@ public:
     }
 };
 
-void AddPythonCreatureScripts()
+void AddSC_PythonCreatureScripts()
 {
     new PythonCreatureScript();
     new PythonAllCreatureScript();

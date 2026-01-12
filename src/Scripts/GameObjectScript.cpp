@@ -67,7 +67,7 @@ public:
     }
 };
 
-void AddPythonGameObjectScripts()
+void AddSC_PythonGameObjectScripts()
 {
     new PythonGameObjectScript();
 }

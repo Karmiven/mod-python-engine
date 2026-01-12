@@ -27,7 +27,7 @@ public:
     }
 };
 
-void AddPythonAccountScripts()
+void AddSC_PythonAccountScripts()
 {
     new PythonAccountScript();
 }

@@ -114,7 +114,7 @@ public:
     }
 };
 
-void AddPythonItemScripts()
+void AddSC_PythonItemScripts()
 {
     new PythonItemScript();
 }
