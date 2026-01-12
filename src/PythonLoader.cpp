@@ -7,7 +7,7 @@ CREATE_REGISTRY_SCOPE(Scripts);
 
 // Forward declarations into the Scripts scope
 REGISTER_TO_SCOPE(Scripts, AddSC_PythonAccountScripts);
-REGISTER_TO_SCOPE(Scripts, AddPythonCommandScripts);
+REGISTER_TO_SCOPE(Scripts, AddSC_PythonCommandScripts);
 REGISTER_TO_SCOPE(Scripts, AddSC_PythonCreatureScripts);
 REGISTER_TO_SCOPE(Scripts, AddSC_PythonGameObjectScripts);
 REGISTER_TO_SCOPE(Scripts, AddSC_PythonItemScripts);
