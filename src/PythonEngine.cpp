@@ -1,8 +1,7 @@
 #include "PythonEngine.h"
-#include "PythonException.h"
+#include "PythonOutput.h"
 #include "HookRegistry.h"
 #include "Config.h"
-#include "Log.h"
 #include "Timer.h"
 #include <filesystem>
 
@@ -17,7 +16,10 @@ PythonEngine* PythonEngine::instance()
 
 PythonEngine::~PythonEngine()
 {
-    // Destructor calls Shutdown just in case it wasn't called manually
+    // NOTE: In practice, this should rarely execute actual cleanup since the
+    // server's shutdown sequence should call Shutdown() explicitly. However,
+    // this guarantees cleanup even in abnormal termination scenarios like
+    // crashes during shutdown or unexpected destructor ordering.
     Shutdown();
 }
 
@@ -26,8 +28,8 @@ void PythonEngine::Initialize()
     if (Py_IsInitialized())
         return;
 
-    enabled = sConfigMgr->GetOption<bool>("Python.Enabled", true);
-    if (!enabled)
+    bool isEnabled = sConfigMgr->GetOption<bool>("Python.Enabled", true);
+    if (!isEnabled)
     {
         LOG_INFO("module.python", "Python Engine is disabled in config.");
         return;
@@ -46,16 +48,21 @@ void PythonEngine::Initialize()
         API::Object main_module = API::Import("__main__");
         main_namespace = main_module.attr("__dict__");
 
-        // CRITICAL: After Py_Initialize(), the calling thread holds the GIL. We must
-        // release it to allow other threads to use GILGuard (PyGILState_Ensure).
+        // CRITICAL: After Py_Initialize(), the main thread holds the GIL. We must
+        // release it to allow other threads to use PyGILState_Ensure (GILGuard).
         PyEval_SaveThread();
+
+        // Release: all initialization writes are visible when enabled is set
+        enabled.store(true, std::memory_order_release);
 
         LOG_INFO("module.python", "Python Engine Initialized Successfully.");
     }
     catch (...)
     {
+        // Relaxed: we're in error path, no synchronization needed
+        enabled.store(false, std::memory_order_relaxed);
+
         LOG_ERROR("module.python", "Python Engine Initialization Failed!");
-        enabled = false;
     }
 }
 
@@ -66,25 +73,26 @@ void PythonEngine::Shutdown()
 
     LOG_INFO("module.python", "Shutting down Python Engine...");
 
-    {
-        std::unique_lock<std::shared_mutex> lock(hookMutex);
-        GILGuard gil;
+    // Set disabled with release semantics
+    enabled.store(false, std::memory_order_release);
 
-        hookMap.clear();
+    {
+        ClearHooks();
         main_namespace = API::Object(); // Release main module ref
     }
 
-    // Py_Finalize should generally be called only if we are sure no other C++
-    // statics need Python
+    // WARNING: This should only be called if no other C++ static objects hold
+    // Python references, as accessing them after finalization causes crashes.
+    // The GIL is automatically destroyed during finalization.
     Py_Finalize();
-    enabled = false;
 
     LOG_INFO("module.python", "Python Engine shutdown complete.");
 }
 
 void PythonEngine::LoadScripts()
 {
-    if (!enabled)
+    // Acquire: see initialization writes
+    if (!enabled.load(std::memory_order_acquire))
         return;
 
     uint32 oldMSTime = getMSTime();
@@ -104,71 +112,52 @@ void PythonEngine::LoadScripts()
     }
 
     int count = 0;
-    for (const auto& entry : fs::recursive_directory_iterator(scriptsPath))
+    GILGuard gil;
+
+    for (auto const& entry : fs::recursive_directory_iterator(scriptsPath))
     {
         if (entry.path().extension() != ".py")
             continue;
 
-        ExecuteScript(entry.path().string());
-        count++;
+        LOG_DEBUG("module.python", "Executing script: {}...", entry.path().string());
+
+        try
+        {
+            API::ExecFile(entry.path().string(), main_namespace, main_namespace);
+            count++;
+        }
+        catch (...)
+        {
+            LOG_ERROR("module.python", "Failed to execute script: {}", entry.path().string());
+            LOG_ERROR("module.python", "{}", ExceptionHelper::Format());
+        }
     }
 
     LOG_INFO("module.python", ">> Loaded {} Python scripts in {} ms.", count, GetMSTimeDiffToNow(oldMSTime));
 }
 
-void PythonEngine::ReloadScripts()
+void PythonEngine::ClearHooks()
 {
-    if (!enabled)
-        return;
+    // Acquire exclusive lock and GIL, then clear hooks
+    std::unique_lock<std::shared_mutex> lock(hookMutex);
 
-    reloading = true;
+    LOG_DEBUG("module.python", "All event handlers finished. Clearing hooks...");
 
-    // Acquire unique_lock - this blocks until all Trigger() calls
-    // (which hold shared_locks) finish naturally
-    {
-        std::unique_lock<std::shared_mutex> lock(hookMutex);
-
-        LOG_DEBUG("module.python", "All event handlers finished. Clearing hooks...");
-
-        GILGuard gil;
-        hookMap.clear();
-    }
-
-    LoadScripts();
-    reloading = false;
-}
-
-void PythonEngine::ExecuteScript(const std::string& filepath)
-{
-    if (!enabled)
-        return;
-
-    LOG_DEBUG("module.python", "Executing script file: {}...", filepath);
-
-    // Acquire GIL BEFORE Python script execution
     GILGuard gil;
-
-    try
-    {
-        API::ExecFile(filepath, main_namespace, main_namespace);
-    }
-    catch (...)
-    {
-        LOG_ERROR("module.python", "Failed to execute script file: {}", filepath);
-        LogException();
-    }
+    hookMap.clear();
 }
 
-void PythonEngine::RegisterHook(const std::string& eventName, API::Object callback, uint32 entryId)
+void PythonEngine::RegisterHook(std::string const& eventName, API::Object callback, uint32 entryId)
 {
-    if (!enabled || eventName.empty())
+    // Acquire: see initialization
+    if (!enabled.load(std::memory_order_acquire) || eventName.empty())
         return;
 
     // Validate that the provided object is actually a function or callable object.
     // This prevents runtime crashes later when the event attempts to trigger.
     if (!PyCallable_Check(callback.ptr()))
     {
-        LOG_ERROR("module.python", "Attempted to register a non-callable callback for hook '{}' and entry {}.",
+        LOG_ERROR("module.python", "Attempted to register a non-callable object for hook '{}' (entry {}).",
                   eventName, entryId);
         return;
     }
@@ -198,35 +187,43 @@ void PythonEngine::RegisterHook(const std::string& eventName, API::Object callba
     try
     {
         hookMap[hookId][entryId].push_back(callback);
-        LOG_DEBUG("module.python", "Registered hook '{}' for entry {}", eventName, entryId);
+        LOG_DEBUG("module.python", "Registered hook '{}' (entry {})", eventName, entryId);
     }
     catch (...)
     {
-        LOG_ERROR("module.python", "Failed to register hook '{}' for entry {}", eventName, entryId);
-        LogException();
+        LOG_ERROR("module.python", "Failed to register hook '{}' (entry {})\n{}", eventName, entryId);
+        LOG_ERROR("module.python", "{}", ExceptionHelper::Format());
     }
 }
 
-void PythonEngine::LogException()
+ExecutionResult PythonEngine::ExecuteCode(std::string const& code)
 {
+    // Acquire: see initialization
+    if (!enabled.load(std::memory_order_acquire))
+        return ExecutionResult::Error("Python Engine is disabled");
+
+    if (triggerDepth > 0)
+        return ExecutionResult::Error("Cannot execute while hooks are running");
+
+    // Try to acquire exclusive lock
+    std::unique_lock<std::shared_mutex> lock(hookMutex, std::defer_lock);
+    if (!lock.try_lock())
+        return ExecutionResult::Error("Python engine is busy");
+
+    GILGuard gil;
+
     try
     {
-        std::rethrow_exception(std::current_exception());
-    }
-    catch (API::ErrorAlreadySet const&)
-    {
-        std::string error = ExceptionHandler::FormatException();
-        if (error.empty())
-            error = "Unable to extract traceback...";
+        OutputCapture capture;
+        API::Exec(code, main_namespace, main_namespace);
+        std::string output = capture.GetOutput();
 
-        LOG_ERROR("module.python", "Python Exception:\n{}", error);
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("module.python", "C++ Exception:\n{}", e.what());
+        return ExecutionResult::Success(
+            output.empty() ? "Execution completed successfully" : output
+        );
     }
     catch (...)
     {
-        LOG_ERROR("module.python", "C++ Exception:\nUnknown non-standard exception...");
+        return ExecutionResult::Error(ExceptionHelper::Format());
     }
 }

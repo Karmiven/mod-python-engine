@@ -4,12 +4,14 @@
 #include "PythonAPI.h"
 #include "PythonConverter.h"
 #include "PythonGIL.h"
+#include "ExceptionHelper.h"
+#include "ExecutionResult.h"
 #include "HookInfo.h"
 #include "Define.h"
+#include "Log.h"
 #include <atomic>
 #include <shared_mutex>
 #include <string>
-#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -17,6 +19,7 @@
 void InitAzerothCoreModule();
 
 using namespace PyEng::Bridge;
+using namespace PyEng::Utilities;
 using HookInfo = PyEng::Hooks::HookInfo;
 
 class PythonEngine
@@ -24,24 +27,111 @@ class PythonEngine
 public:
     [[nodiscard]] static PythonEngine* instance();
 
-    PythonEngine(const PythonEngine&) = delete;
-    PythonEngine& operator=(const PythonEngine&) = delete;
+    PythonEngine(PythonEngine const&) = delete;
+    PythonEngine& operator=(PythonEngine const&) = delete;
 
+    /**
+     * @brief Initializes Python interpreter and prepares for script execution
+     */
     void Initialize();
-    void LoadScripts();
-    void ReloadScripts();
+
+    /**
+     * @brief Safely shuts down Python engine and cleans up all resources
+     */
     void Shutdown();
 
     /**
-     * @brief Register a Python callback for a game event hook
+     * @brief Loads and executes all Python scripts from the scripts directory
+     */
+    void LoadScripts();
+
+    /**
+     * @brief Clear all registered hooks with proper locking and GIL
+     */
+    void ClearHooks();
+
+    /**
+     * @brief Registers Python callback for the game event hook
      *
      * @param eventName Hook event name (ex., "PLAYER_ON_LOGIN")
      * @param callback Python callable object
-     * @param entryId Specific entry ID (creature, item, etc.; 0 for global)
+     * @param entryId Specific entry ID (creature, item, etc.; 0 = global)
      */
-    void RegisterHook(const std::string& eventName, API::Object callback, uint32 entryId = 0);
+    void RegisterHook(std::string const& eventName, API::Object callback, uint32 entryId = 0);
 
-    [[nodiscard]] bool IsEnabled() const { return enabled; }
+    /**
+     * @brief Executes arbitrary Python code string
+     *
+     * @param code Python code to execute
+     * @return ExecutionResult with success status and output/error message
+     */
+    [[nodiscard]] ExecutionResult ExecuteCode(std::string const& code);
+
+    /**
+     * @brief Begin reload operation (thread-safe with acquire semantics)
+     *
+     * Uses acquire ordering to ensure all subsequent operations see consistent
+     * state after the flag is set.
+     *
+     * @return True if reload started, false if already reloading
+     */
+    [[nodiscard]] bool BeginReload() noexcept
+    {
+        // compare_exchange_strong with acquire-release semantics:
+        // - success: acquire (we see all previous writes)
+        // - failure: relaxed (we're not proceeding anyway)
+        bool expected = false;
+        return reloading.compare_exchange_strong(expected, true,
+                                                 std::memory_order_acquire, // Success: acquire semantics
+                                                 std::memory_order_relaxed  // Failure: no synchronization needed
+        );
+    }
+
+    /**
+     * @brief End reload operation (thread-safe with release semantics)
+     *
+     * Uses release ordering to ensure all hook modifications are visible to
+     * other threads when the flag is cleared.
+     */
+    void EndReload() noexcept
+    {
+        // Release: all previous writes (hook modifications) are visible
+        // to threads that acquire this flag
+        reloading.store(false, std::memory_order_release);
+    }
+
+    /**
+     * @brief Check if currently reloading (with acquire semantics)
+     *
+     * Uses acquire ordering to ensure we see all modifications
+     * that happened before reloading was set.
+     *
+     * @return True if reload in progress
+     */
+    [[nodiscard]] bool IsReloading() const noexcept
+    {
+        return reloading.load(std::memory_order_acquire);
+    }
+
+    /**
+     * @brief Checks if engine is busy (hooks running or reloading)
+     *
+     * @return True if engine is busy, false otherwise
+     */
+    [[nodiscard]] bool IsBusy() const noexcept
+    {
+        return triggerDepth > 0 || reloading.load(std::memory_order_acquire);
+    }
+
+    /**
+     * @brief Checks if engine is enabled (with acquire semantics)
+     *
+     * @return True if enabled
+     */
+    [[nodiscard]] bool IsEnabled() const noexcept
+    {
+        return enabled.load(std::memory_order_acquire);
+    }
 
     /**
      * @brief Main bridge between C++ game logic and Python scripts
@@ -50,21 +140,23 @@ public:
      * this method looks up all registered Python callbacks and executes them.
      *
      * @param hinfo Hook identifier to trigger
-     * @param entryId Specific entry ID (creature, item, etc.; 0 for global)
+     * @param entryId Specific entry ID (creature, item, etc.; 0 = global)
      * @param args Variadic arguments to pass to Python callbacks
      */
     template<typename... Args>
     void Trigger(HookInfo hinfo, uint32 entryId, Args&&... args)
     {
-        if (!enabled || reloading || !HasBindingsFor(hinfo, entryId))
+        // Acquire reloading flag to ensure we see hook modifications.
+        // NOTE: Could use relaxed here since hookMutex provides synchronization,
+        // but acquire is safer and the cost is negligible.
+        if (!enabled.load(std::memory_order_acquire) || reloading.load(std::memory_order_acquire))
             return;
 
-        auto argsTuple = std::make_tuple(std::forward<Args>(args)...);
         std::shared_lock<std::shared_mutex> lock(hookMutex);
 
-        // CRITICAL: Double-check reloading after acquiring lock. Prevent race
-        // conditions with reload scripts operations.
-        if (reloading)
+        // CRITICAL: Double-check reloading and bindings after acquiring lock.
+        // Prevent race conditions with reload scripts operations.
+        if (reloading.load(std::memory_order_acquire) || !HasBindingsFor(hinfo, entryId))
             return;
 
         TriggerDepthGuard depthGuard;
@@ -73,9 +165,9 @@ public:
         if (itr == hookMap.end())
             return;
 
-        TriggerCallbacks(itr->second, 0, argsTuple); // global hooks
+        TriggerCallbacks(itr->second, 0, std::forward<Args>(args)...);
         if (entryId > 0)
-            TriggerCallbacks(itr->second, entryId, argsTuple); // entry-specific hooks
+            TriggerCallbacks(itr->second, entryId, std::forward<Args>(args)...);
     }
 
     static void TriggerHook(HookInfo* hinfo, uint32 entryId);
@@ -88,23 +180,20 @@ private:
     PythonEngine() = default;
     ~PythonEngine();
 
-    void ExecuteScript(const std::string& filepath);
-    void LogException();
-
     // RAII guard for tracking Trigger depth
     struct TriggerDepthGuard
     {
         TriggerDepthGuard() { PythonEngine::triggerDepth++; }
         ~TriggerDepthGuard() { PythonEngine::triggerDepth--; }
-        TriggerDepthGuard(const TriggerDepthGuard&) = delete;
-        TriggerDepthGuard& operator=(const TriggerDepthGuard&) = delete;
+        TriggerDepthGuard(TriggerDepthGuard const&) = delete;
+        TriggerDepthGuard& operator=(TriggerDepthGuard const&) = delete;
     };
 
     /**
-     * @brief Check if any callbacks are registered for a specific hook
+     * @brief Checks if any callbacks are registered for specific hook
      *
      * @param hinfo Hook identifier to check
-     * @param entryId Specific entry ID (creature, item, etc.; 0 for global)
+     * @param entryId Specific entry ID (creature, item, etc.; 0 = global)
      * @return True if callbacks registered, false otherwise
      */
     [[nodiscard]] bool HasBindingsFor(HookInfo hinfo, uint32 entryId = 0) const noexcept
@@ -123,32 +212,29 @@ private:
     }
 
     /**
-     * @brief Executes all registered Python callbacks for a specific hook
+     * @brief Executes all registered Python callbacks for specific hook
      *
      * @param entryMap Map of entity IDs to callback vectors
-     * @param entryId Specific entry ID (creature, item, etc.; 0 for global)
-     * @param argsTuple Tuple of C++ arguments to pass to Python callbacks
+     * @param entryId Specific entry ID (creature, item, etc.; 0 = global)
+     * @param args Variadic arguments to pass to Python callbacks
      */
-    template<typename Tuple>
-    void TriggerCallbacks(const HookEntryMap& entryMap, uint32 entryId, const Tuple& argsTuple)
+    template<typename... Args>
+    void TriggerCallbacks(HookEntryMap const& entryMap, uint32 entryId, Args&&... args)
     {
         auto itr = entryMap.find(entryId);
         if (itr == entryMap.end())
             return;
 
         GILGuard gil;
-
-        for (const auto& callback : itr->second)
+        for (auto const& callback : itr->second)
         {
             try
             {
-                std::apply([&](const auto&... unpacked_args) {
-                    callback(Converter::ToPython(unpacked_args)...);
-                }, argsTuple);
+                callback(Converter::ToPython(args)...);
             }
             catch (...)
             {
-                LogException();
+                LOG_ERROR("module.python", "{}", ExceptionHelper::Format());
             }
         }
     }
